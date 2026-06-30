@@ -1,0 +1,738 @@
+#!/bin/bash
+# ============================================================
+#   CHANELOG VPN SCRIPT - INSTALLER
+#   Repository: https://github.com/masamuda1993/xray
+# ============================================================
+
+REPO="https://raw.githubusercontent.com/chanelog/bin/main"
+RAW="https://raw.githubusercontent.com/masamuda1993/xray/main"
+SCRIPT_DIR="/etc/vpn-script"
+BIN_DIR="/usr/local/bin"
+
+# ─── Colors ────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
+WHITE='\033[1;37m'
+NC='\033[0m'
+
+# ─── Check Root ────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  echo -e "${RED}[ERROR]${NC} Script harus dijalankan sebagai root!"
+  exit 1
+fi
+
+# ─── Check OS ──────────────────────────────────────────────
+. /etc/os-release 2>/dev/null
+if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+  echo -e "${RED}[ERROR]${NC} Script hanya mendukung Ubuntu/Debian!"
+  exit 1
+fi
+
+# ─── Banner ────────────────────────────────────────────────
+clear
+echo -e "${CYAN}"
+cat <<'EOF'
+  ██████╗██╗  ██╗ █████╗ ███╗   ██╗███████╗██╗      ██████╗  ██████╗
+ ██╔════╝██║  ██║██╔══██╗████╗  ██║██╔════╝██║     ██╔═══██╗██╔════╝
+ ██║     ███████║███████║██╔██╗ ██║█████╗  ██║     ██║   ██║██║  ███╗
+ ██║     ██╔══██║██╔══██║██║╚██╗██║██╔══╝  ██║     ██║   ██║██║   ██║
+ ╚██████╗██║  ██║██║  ██║██║ ╚████║███████╗███████╗╚██████╔╝╚██████╔╝
+  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝ ╚═════╝  ╚═════╝
+EOF
+echo -e "${NC}"
+echo -e "${WHITE}        VPN TUNNEL SCRIPT - XRAY/V2RAY + SSHWS EDITION${NC}"
+echo -e "${YELLOW}        ══════════════════════════════════════════════${NC}"
+echo ""
+
+# ─── Input Domain ──────────────────────────────────────────
+ask_domain() {
+  while true; do
+    echo -e "${CYAN}[*]${NC} Masukkan domain yang sudah diarahkan ke IP server ini:"
+    echo -ne "  ${WHITE}Domain${NC}: "
+    read -r DOMAIN
+    DOMAIN=$(echo "$DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    if [[ -z "$DOMAIN" ]]; then
+      echo -e "${RED}[ERROR]${NC} Domain tidak boleh kosong!"
+      continue
+    fi
+
+    if ! echo "$DOMAIN" | grep -qE '^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'; then
+      echo -e "${RED}[ERROR]${NC} Format domain tidak valid!"
+      continue
+    fi
+
+    echo -e "${CYAN}[*]${NC} Memverifikasi domain ${WHITE}$DOMAIN${NC} → IP server..."
+    SERVER_IP=$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || \
+                curl -s4 --max-time 5 https://api.ipify.org 2>/dev/null || \
+                curl -s4 --max-time 5 https://ipv4.icanhazip.com 2>/dev/null)
+    DOMAIN_IP=$(dig +short "$DOMAIN" A 2>/dev/null | grep -E '^[0-9]+\.' | tail -1)
+
+    if [[ -z "$SERVER_IP" ]]; then
+      echo -e "${YELLOW}[WARN]${NC} Tidak bisa cek IP server, lanjut tanpa verifikasi..."
+      break
+    fi
+
+    if [[ -z "$DOMAIN_IP" ]]; then
+      echo -e "${RED}[WARN]${NC} DNS domain belum ditemukan."
+      echo -ne "  Lanjutkan meski DNS belum propagasi? [y/N]: "
+      read -r FORCE
+      [[ "$FORCE" =~ ^[Yy]$ ]] && break
+      continue
+    fi
+
+    if [[ "$DOMAIN_IP" == "$SERVER_IP" ]]; then
+      echo -e "${GREEN}[OK]${NC} Domain ${WHITE}$DOMAIN${NC} → ${GREEN}$SERVER_IP${NC} ✓ VERIFIED"
+      break
+    else
+      echo -e "${YELLOW}[WARN]${NC} Domain → $DOMAIN_IP, Server → $SERVER_IP (tidak cocok)"
+      echo -ne "  Lanjutkan? [y/N]: "
+      read -r FORCE
+      [[ "$FORCE" =~ ^[Yy]$ ]] && break
+    fi
+  done
+  echo "$DOMAIN" > /tmp/vpn_domain.tmp
+}
+
+# ─── Install Dependencies ──────────────────────────────────
+install_deps() {
+  echo -e "\n${CYAN}[*]${NC} Menginstall dependensi sistem..."
+  apt-get update -qq 2>/dev/null
+  apt-get install -y -qq \
+    curl wget unzip zip socat tar \
+    dnsutils net-tools \
+    openssl ca-certificates \
+    cron jq uuid-runtime \
+    python3 \
+    iptables 2>/dev/null
+  echo -e "${GREEN}[OK]${NC} Dependensi terinstall"
+}
+
+# ─── Install Nginx ─────────────────────────────────────────
+install_nginx() {
+  echo -e "\n${CYAN}[*]${NC} Menginstall Nginx..."
+  apt-get install -y -qq nginx 2>/dev/null
+  systemctl enable nginx 2>/dev/null
+  echo -e "${GREEN}[OK]${NC} Nginx terinstall"
+}
+
+# ─── Install Dropbear ──────────────────────────────────────
+install_dropbear() {
+  echo -e "\n${CYAN}[*]${NC} Menginstall Dropbear SSH..."
+  apt-get install -y -qq dropbear 2>/dev/null
+
+  cat > /etc/default/dropbear <<EOF2
+NO_START=0
+DROPBEAR_PORT=442
+DROPBEAR_EXTRA_ARGS="-p 109 -p 143"
+DROPBEAR_BANNER="/etc/vpn-script/banner.txt"
+DROPBEAR_RECEIVE_WINDOW=65536
+EOF2
+
+  systemctl enable dropbear 2>/dev/null
+  systemctl restart dropbear 2>/dev/null
+  echo -e "${GREEN}[OK]${NC} Dropbear terinstall (port: 442, 109, 143)"
+}
+
+# ─── Install Xray ──────────────────────────────────────────
+install_xray() {
+  echo -e "\n${CYAN}[*]${NC} Menginstall Xray dari chanelog/bin..."
+  mkdir -p /usr/local/bin /etc/xray /var/log/xray
+
+  ARCH=$(uname -m)
+  if [[ "$ARCH" == "aarch64" ]]; then
+    XRAY_ZIP="Xray-linux-arm64-v8a.zip"
+  else
+    XRAY_ZIP="Xray-linux-64.zip"
+  fi
+
+  wget -q "$REPO/$XRAY_ZIP" -O /tmp/xray.zip 2>/dev/null
+  if [[ $? -ne 0 ]] || [[ ! -s /tmp/xray.zip ]]; then
+    echo -e "${YELLOW}[WARN]${NC} Gagal dari chanelog/bin, coba install-release.sh..."
+    wget -q "$REPO/install-release.sh" -O /tmp/install-release.sh 2>/dev/null
+    if [[ -s /tmp/install-release.sh ]]; then
+      chmod +x /tmp/install-release.sh
+      bash /tmp/install-release.sh 2>/dev/null
+    else
+      echo -e "${YELLOW}[WARN]${NC} Fallback ke GitHub release..."
+      XRAY_VER=$(curl -s --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4)
+      [[ -z "$XRAY_VER" ]] && XRAY_VER="v25.4.30"
+      wget -q "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/${XRAY_ZIP}" \
+        -O /tmp/xray.zip 2>/dev/null
+    fi
+  fi
+
+  if [[ -s /tmp/xray.zip ]]; then
+    cd /tmp && unzip -qo xray.zip xray 2>/dev/null
+    [[ -f /tmp/xray ]] && mv /tmp/xray /usr/local/bin/xray
+  fi
+
+  if [[ ! -f /usr/local/bin/xray ]]; then
+    echo -e "${RED}[ERROR]${NC} Xray binary tidak ditemukan! Install manual."
+    exit 1
+  fi
+
+  chmod +x /usr/local/bin/xray
+
+  # jq
+  if ! command -v jq &>/dev/null; then
+    wget -q "$REPO/jq-linux-amd64" -O /usr/local/bin/jq 2>/dev/null
+    chmod +x /usr/local/bin/jq 2>/dev/null
+    command -v jq &>/dev/null || apt-get install -y -qq jq 2>/dev/null
+  fi
+
+  # Systemd service
+  cat > /etc/systemd/system/xray.service <<EOF2
+[Unit]
+Description=Xray Service
+Documentation=https://github.com/xtls
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF2
+
+  systemctl daemon-reload
+  systemctl enable xray
+  echo -e "${GREEN}[OK]${NC} Xray terinstall ($(xray version 2>/dev/null | head -1))"
+}
+
+# ─── Install SSHWS (ws-ssh-proxy.py custom, transparan) ────
+install_sshws() {
+  local domain="$1"
+  echo -e "\n${CYAN}[*]${NC} Menginstall SSH WebSocket (SSHWS)..."
+
+  command -v python3 &>/dev/null || apt-get install -y -qq python3 2>/dev/null
+
+  if [[ ! -f "$SCRIPT_DIR/ws-ssh-proxy.py" ]]; then
+    echo -e "${YELLOW}[WARN]${NC} ws-ssh-proxy.py belum tersedia, akan dipasang setelah download script files"
+    return 1
+  fi
+
+  mkdir -p /etc/ssh-ws
+
+  # Default backend: OpenSSH (port 22), paling umum dipakai
+  cat > /etc/ssh-ws/config <<EOF2
+SSH_PORT=22
+WS_PORT_TLS=20001
+WS_PORT_NTLS=20002
+EOF2
+
+  cat > /etc/systemd/system/ssh-ws.service <<EOF2
+[Unit]
+Description=SSH WebSocket Proxy (custom, transparan)
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/bin/python3 $SCRIPT_DIR/ws-ssh-proxy.py --listen-host 127.0.0.1 --port-tls 20001 --port-ntls 20002 --ssh-host 127.0.0.1 --ssh-port 22
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+StandardOutput=append:/var/log/ssh-ws.log
+StandardError=append:/var/log/ssh-ws.log
+
+[Install]
+WantedBy=multi-user.target
+EOF2
+
+  systemctl daemon-reload
+  systemctl enable ssh-ws 2>/dev/null
+
+  mkdir -p "$SCRIPT_DIR/db"
+  touch "$SCRIPT_DIR/db/sshws.db"
+
+  echo -e "${GREEN}[OK]${NC} SSHWS terinstall (backend: OpenSSH port 22)"
+  return 0
+}
+
+# ─── Tambah lokasi nginx untuk SSHWS ────────────────────────
+add_nginx_sshws_locations() {
+  local nginx_conf="/etc/nginx/conf.d/xray.conf"
+  grep -q "location /sshws {" "$nginx_conf" 2>/dev/null && return
+
+  python3 - "$nginx_conf" <<'PYEOF2' 2>/dev/null
+import sys
+conf_file = sys.argv[1]
+with open(conf_file, 'r') as f:
+    content = f.read()
+
+sshws_tls = """
+    location /sshws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:20001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+"""
+sshws_ntls = """
+    location /sshws-ntls {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:20002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+"""
+if '/sshws' not in content:
+    content = content.replace('    location /vless-ws {', sshws_tls + '    location /vless-ws {', 1)
+if '/sshws-ntls' not in content:
+    content = content.replace('    location / {\n        return 301', sshws_ntls + '    location / {\n        return 301', 1)
+
+with open(conf_file, 'w') as f:
+    f.write(content)
+PYEOF2
+
+  nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null
+}
+
+# ─── Configure Nginx (Xray + SSHWS) ───────────────────────
+configure_nginx() {
+  local domain="$1"
+  mkdir -p /etc/nginx/conf.d /var/www/html
+
+  rm -f /etc/nginx/sites-enabled/default
+  rm -f /etc/nginx/conf.d/default.conf
+
+  cat > /etc/nginx/conf.d/xray.conf <<EOF2
+# Port 80 — non-TLS WebSocket + redirect ke HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    # VMess non-TLS
+    location /vmess-ntls {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:10003;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+    # VLess non-TLS
+    location /vless-ntls {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:10004;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+    # SSHWS non-TLS
+    location /sshws-ntls {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:20002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+# Port 443 — HTTPS/TLS WebSocket
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${domain};
+
+    ssl_certificate /etc/ssl/xray/xray.crt;
+    ssl_certificate_key /etc/ssl/xray/xray.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # VMess TLS
+    location /vmess-ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:10001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+    # VLess TLS
+    location /vless-ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:10002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+    # SSHWS TLS
+    location /sshws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:20001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 3600s;
+    }
+
+    location / {
+        root /var/www/html;
+        index index.html;
+    }
+}
+EOF2
+
+  cat > /var/www/html/index.html <<EOF2
+<!DOCTYPE html>
+<html>
+<head><title>${domain}</title></head>
+<body style="background:#1a1a2e;color:#e0e0e0;font-family:monospace;text-align:center;padding:50px">
+<h1 style="color:#00d4ff">Server Running</h1>
+</body>
+</html>
+EOF2
+
+  nginx -t 2>/dev/null && systemctl restart nginx 2>/dev/null
+  echo -e "${GREEN}[OK]${NC} Nginx dikonfigurasi (Xray + SSHWS)"
+}
+
+# ─── Generate Xray Config ──────────────────────────────────
+generate_xray_config() {
+  mkdir -p /etc/vpn-script/db
+  touch /etc/vpn-script/db/vmess.db
+  touch /etc/vpn-script/db/vless.db
+
+  cat > /etc/xray/config.json <<'XRAYEOF'
+{
+  "log": {
+    "loglevel": "warning",
+    "error": "/var/log/xray/error.log",
+    "access": "/var/log/xray/access.log"
+  },
+  "inbounds": [
+    {
+      "tag": "vmess-ws-tls",
+      "port": 10001,
+      "listen": "127.0.0.1",
+      "protocol": "vmess",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vmess-ws" }
+      }
+    },
+    {
+      "tag": "vless-ws-tls",
+      "port": 10002,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vless-ws" }
+      }
+    },
+    {
+      "tag": "vmess-ws-ntls",
+      "port": 10003,
+      "listen": "127.0.0.1",
+      "protocol": "vmess",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vmess-ntls" }
+      }
+    },
+    {
+      "tag": "vless-ws-ntls",
+      "port": 10004,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vless-ntls" }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom", "settings": {} }
+  ]
+}
+XRAYEOF
+
+  echo -e "${GREEN}[OK]${NC} Xray config dibuat"
+}
+
+# ─── Install SSL via acme.sh ───────────────────────────────
+install_ssl() {
+  local domain="$1"
+  echo -e "\n${CYAN}[*]${NC} Menginstall acme.sh dari chanelog/bin..."
+  mkdir -p /etc/ssl/xray
+
+  wget -q "$REPO/acme.sh" -O /tmp/acme_install.sh 2>/dev/null
+  if [[ -s /tmp/acme_install.sh ]]; then
+    chmod +x /tmp/acme_install.sh
+    bash /tmp/acme_install.sh --install-online -m "admin@${domain}" 2>/dev/null || \
+    bash /tmp/acme_install.sh -m "admin@${domain}" 2>/dev/null
+  fi
+
+  if [[ ! -f /root/.acme.sh/acme.sh ]]; then
+    echo -e "${YELLOW}[WARN]${NC} Fallback install acme.sh dari official..."
+    curl -s https://get.acme.sh | bash -s email="admin@${domain}" 2>/dev/null
+  fi
+
+  if [[ ! -f /root/.acme.sh/acme.sh ]]; then
+    echo -e "${RED}[ERROR]${NC} acme.sh gagal diinstall!"
+    echo -e "${YELLOW}[WARN]${NC} Membuat self-signed cert sementara..."
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+      -keyout /etc/ssl/xray/xray.key \
+      -out /etc/ssl/xray/xray.crt \
+      -days 365 -nodes \
+      -subj "/CN=${domain}" 2>/dev/null
+    return
+  fi
+
+  systemctl stop nginx 2>/dev/null
+  sleep 1
+
+  echo -e "${CYAN}[*]${NC} Meminta SSL certificate untuk ${WHITE}$domain${NC}..."
+
+  /root/.acme.sh/acme.sh --register-account -m "admin@${domain}" 2>/dev/null
+
+  /root/.acme.sh/acme.sh --issue \
+    --standalone \
+    -d "$domain" \
+    --keylength ec-256 \
+    --httpport 80 \
+    --force 2>/dev/null
+
+  if [[ $? -ne 0 ]]; then
+    echo -e "${YELLOW}[WARN]${NC} Let's Encrypt gagal, coba ZeroSSL..."
+    /root/.acme.sh/acme.sh --set-default-ca --server zerossl 2>/dev/null
+    /root/.acme.sh/acme.sh --issue \
+      --standalone \
+      -d "$domain" \
+      --keylength ec-256 \
+      --httpport 80 \
+      --force 2>/dev/null
+  fi
+
+  /root/.acme.sh/acme.sh --installcert -d "$domain" \
+    --ecc \
+    --key-file /etc/ssl/xray/xray.key \
+    --fullchain-file /etc/ssl/xray/xray.crt \
+    --reloadcmd "systemctl restart xray nginx sshws 2>/dev/null" 2>/dev/null
+
+  chmod 644 /etc/ssl/xray/xray.key 2>/dev/null
+  chmod 644 /etc/ssl/xray/xray.crt 2>/dev/null
+
+  if [[ ! -s /etc/ssl/xray/xray.crt ]]; then
+    echo -e "${YELLOW}[WARN]${NC} SSL gagal, membuat self-signed cert sementara..."
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+      -keyout /etc/ssl/xray/xray.key \
+      -out /etc/ssl/xray/xray.crt \
+      -days 365 -nodes \
+      -subj "/CN=${domain}" 2>/dev/null
+  fi
+
+  systemctl start nginx 2>/dev/null
+  echo -e "${GREEN}[OK]${NC} SSL Certificate selesai untuk $domain"
+}
+
+# ─── Download & Install Script Files ──────────────────────
+install_script_files() {
+  local domain="$1"
+
+  echo -e "\n${CYAN}[*]${NC} Mendownload script files dari GitHub..."
+  mkdir -p $SCRIPT_DIR/db $SCRIPT_DIR/menu
+
+  echo "$domain" > $SCRIPT_DIR/domain
+  echo "$domain" > $SCRIPT_DIR/db/domain
+
+  local ok=true
+  for f in menu.sh lib.sh ws-ssh-proxy.py; do
+    echo -ne "  Downloading $f..."
+    wget -q --timeout=30 "$RAW/$f" -O "$SCRIPT_DIR/$f"
+    if [[ $? -ne 0 ]] || [[ ! -s "$SCRIPT_DIR/$f" ]]; then
+      echo -e " ${RED}GAGAL${NC}"
+      ok=false
+    else
+      echo -e " ${GREEN}OK${NC}"
+    fi
+  done
+
+  # Download semua menu scripts termasuk sshws
+  for f in vmess vless sshws nginx dropbear sysinfo changedomain uninstall; do
+    echo -ne "  Downloading menu/${f}.sh..."
+    wget -q --timeout=30 "$RAW/menu/${f}.sh" -O "$SCRIPT_DIR/menu/${f}.sh"
+    if [[ $? -ne 0 ]] || [[ ! -s "$SCRIPT_DIR/menu/${f}.sh" ]]; then
+      echo -e " ${RED}GAGAL${NC}"
+      ok=false
+    else
+      echo -e " ${GREEN}OK${NC}"
+    fi
+  done
+
+  if [[ "$ok" == "false" ]]; then
+    echo -e "${RED}[ERROR]${NC} Beberapa file gagal didownload!"
+    echo -e "${YELLOW}[INFO]${NC} Pastikan repo https://github.com/masamuda1993/xray sudah berisi semua file"
+    exit 1
+  fi
+
+  chmod +x $SCRIPT_DIR/*.sh
+  chmod +x $SCRIPT_DIR/menu/*.sh
+
+  ln -sf $SCRIPT_DIR/menu.sh $BIN_DIR/vpn
+  chmod +x $BIN_DIR/vpn
+
+  cat > $SCRIPT_DIR/banner.txt <<'EOF2'
+  ╔══════════════════════════════════════╗
+  ║     CHANELOG VPN TUNNEL SERVER       ║
+  ║     Unauthorized access prohibited  ║
+  ╚══════════════════════════════════════╝
+EOF2
+
+  echo -e "${GREEN}[OK]${NC} Script files terinstall"
+}
+
+# ─── Setup Cron ────────────────────────────────────────────
+setup_cron() {
+  crontab -l 2>/dev/null | grep -v "vpn-script\|acme.sh --cron" | crontab -
+  (crontab -l 2>/dev/null; echo "0 0 * * * bash $SCRIPT_DIR/lib.sh delete_expired >> /var/log/vpn-cleanup.log 2>&1") | crontab -
+  (crontab -l 2>/dev/null; echo "0 3 * * * /root/.acme.sh/acme.sh --cron >> /var/log/acme-renew.log 2>&1") | crontab -
+  echo -e "${GREEN}[OK]${NC} Cron jobs dikonfigurasi"
+}
+
+# ─── Firewall ──────────────────────────────────────────────
+setup_firewall() {
+  for port in 22 80 443 109 143 442; do
+    iptables -I INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null
+  done
+  mkdir -p /etc/iptables
+  iptables-save > /etc/iptables/rules.v4 2>/dev/null
+  echo -e "${GREEN}[OK]${NC} Firewall dikonfigurasi"
+}
+
+# ─── Main ──────────────────────────────────────────────────
+main() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════${NC}"
+  echo -e "${WHITE}      CHANELOG VPN SCRIPT - PROSES INSTALASI     ${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════${NC}"
+  echo ""
+
+  ask_domain
+  DOMAIN=$(cat /tmp/vpn_domain.tmp)
+  rm -f /tmp/vpn_domain.tmp
+
+  echo -e "\n${YELLOW}[INFO]${NC} Domain : ${WHITE}$DOMAIN${NC}"
+  echo -ne "  Lanjutkan instalasi? [Y/n]: "
+  read -r CONFIRM
+  [[ "$CONFIRM" =~ ^[Nn]$ ]] && exit 0
+
+  install_deps
+  install_nginx
+  install_dropbear
+  install_xray
+  generate_xray_config
+  configure_nginx "$DOMAIN"
+  install_ssl "$DOMAIN"
+
+  # Download semua script files dulu (termasuk ws-ssh-proxy.py)
+  install_script_files "$DOMAIN"
+
+  # Baru install SSHWS, karena butuh ws-ssh-proxy.py yang sudah didownload
+  install_sshws "$DOMAIN"
+  SSHWS_OK=$?
+  [[ $SSHWS_OK -eq 0 ]] && add_nginx_sshws_locations
+
+  setup_cron
+  setup_firewall
+
+  # Restart semua service
+  systemctl daemon-reload 2>/dev/null
+  systemctl restart xray 2>/dev/null
+  systemctl restart nginx 2>/dev/null
+  systemctl restart dropbear 2>/dev/null
+  [[ $SSHWS_OK -eq 0 ]] && systemctl restart ssh-ws 2>/dev/null
+
+  local sshws_info
+  if [[ $SSHWS_OK -eq 0 ]]; then
+    sshws_info="$(systemctl is-active ssh-ws 2>/dev/null)"
+  else
+    sshws_info="not installed"
+  fi
+
+  echo ""
+  echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}║       ✓  INSTALASI BERHASIL SELESAI!             ║${NC}"
+  echo -e "${GREEN}╠══════════════════════════════════════════════════╣${NC}"
+  echo -e "${GREEN}║${NC}  Domain   : ${WHITE}$DOMAIN${NC}"
+  echo -e "${GREEN}║${NC}  Xray     : $(systemctl is-active xray 2>/dev/null)"
+  echo -e "${GREEN}║${NC}  Nginx    : $(systemctl is-active nginx 2>/dev/null)"
+  echo -e "${GREEN}║${NC}  SSHWS    : $sshws_info"
+  echo -e "${GREEN}║${NC}  Jalankan : ${CYAN}vpn${NC}"
+  echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
+  echo ""
+
+  bash $SCRIPT_DIR/menu.sh
+}
+
+main "$@"
