@@ -6,7 +6,7 @@
 SCRIPT_DIR="/etc/vpn-script"
 source "$SCRIPT_DIR/lib.sh"
 
-LINE="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+LINE="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 show_header() {
   clear
@@ -26,12 +26,13 @@ show_header() {
   local ss_count=$(count_ss)
   local ssh_count=$(count_ssh)
 
-  local xray_st nginx_st db_st wsd_st stunnel_st
+  local xray_st nginx_st db_st wsd_st stunnel_st haproxy_st
   systemctl is-active --quiet xray              && xray_st="${GREEN}● ON${NC}"    || xray_st="${RED}● OFF${NC}"
   systemctl is-active --quiet nginx             && nginx_st="${GREEN}● ON${NC}"   || nginx_st="${RED}● OFF${NC}"
   systemctl is-active --quiet dropbear          && db_st="${GREEN}● ON${NC}"      || db_st="${RED}● OFF${NC}"
   systemctl is-active --quiet ws-dropbear 2>/dev/null && wsd_st="${GREEN}● ON${NC}"     || wsd_st="${RED}● OFF${NC}"
   systemctl is-active --quiet stunnel4 2>/dev/null   && stunnel_st="${GREEN}● ON${NC}" || stunnel_st="${RED}● OFF${NC}"
+  systemctl is-active --quiet haproxy 2>/dev/null    && haproxy_st="${GREEN}● ON${NC}" || haproxy_st="${RED}● OFF${NC}"
 
   echo -e "${CYAN}$LINE${NC}"
   echo -e "${WHITE}         ⚡  CHANELOG VPN TUNNEL MANAGER  ⚡${NC}"
@@ -46,9 +47,9 @@ show_header() {
   echo -e "  ${YELLOW}Uptime   ${NC}: ${WHITE}$uptime${NC}"
   echo -e "  ${YELLOW}Network  ${NC}: ${WHITE}$net${NC}"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  Xray: $xray_st Nginx: $nginx_st Dropbear: $db_st SSH-WS: $wsd_st Stunnel4: $stunnel_st"
+  echo -e "  Xray: $xray_st Nginx: $nginx_st Dropbear: $db_st SSH-WS: $wsd_st Stunnel4: $stunnel_st HAProxy: $haproxy_st"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  ${YELLOW}VMess${NC}: ${WHITE}$vmess_count${NC}  ${YELLOW}VLess${NC}: ${WHITE}$vless_count${NC}  ${YELLOW}Trojan${NC}: ${WHITE}$trojan_count${NC}  ${YELLOW}SS${NC}: ${WHITE}$ss_count${NC}  ${YELLOW}SSHWS${NC}: ${WHITE}$ssh_count${NC}"
+  echo -e "  ${YELLOW}VMess${NC}: ${WHITE}$vmess_count${NC}  ${YELLOW}VLess${NC}: ${WHITE}$vless_count${NC}  ${YELLOW}Trojan${NC}: ${WHITE}$trojan_count${NC}  ${YELLOW}SS${NC}: ${WHITE}$ss_count${NC}  ${YELLOW}SSH${NC}: ${WHITE}$ssh_count${NC}"
   echo -e "${CYAN}$LINE${NC}"
 }
 
@@ -71,20 +72,22 @@ main_menu() {
   echo -e "${CYAN}$LINE${NC}"
   echo -e "  ${YELLOW}[7]${NC}  Dropbear Management"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  ${YELLOW}[8]${NC}  Change Domain"
+  echo -e "  ${YELLOW}[8]${NC}  HAProxy SSH-WS SSL"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  ${YELLOW}[9]${NC}  Update Script"
+  echo -e "  ${YELLOW}[9]${NC}  Change Domain"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  ${RED}[10]${NC} Uninstall"
+  echo -e "  ${YELLOW}[10]${NC} Update Script"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  ${YELLOW}[11]${NC} Status Layanan"
+  echo -e "  ${RED}[11]${NC} Uninstall"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  ${YELLOW}[12]${NC} System Info"
+  echo -e "  ${YELLOW}[12]${NC} Status Layanan"
+  echo -e "${CYAN}$LINE${NC}"
+  echo -e "  ${YELLOW}[13]${NC} System Info"
   echo -e "${CYAN}$LINE${NC}"
   echo -e "  ${DIM}[0]${NC}  Exit"
   echo -e "${CYAN}$LINE${NC}"
   echo ""
-  echo -ne "  ${WHITE}Pilih menu [0-12]${NC}: "
+  echo -ne "  ${WHITE}Pilih menu [0-13]${NC}: "
   read -r choice
 
   case "$choice" in
@@ -95,11 +98,12 @@ main_menu() {
     5) bash $SCRIPT_DIR/menu/ss.sh ;;
     6) bash $SCRIPT_DIR/menu/nginx.sh ;;
     7) bash $SCRIPT_DIR/menu/dropbear.sh ;;
-    8) bash $SCRIPT_DIR/menu/changedomain.sh ;;
-    9) bash $SCRIPT_DIR/menu/update.sh ;;
-    10) bash $SCRIPT_DIR/menu/uninstall.sh ;;
-    11) bash $SCRIPT_DIR/menu/services.sh ;;
-    12) bash $SCRIPT_DIR/menu/sysinfo.sh ;;
+    8) bash $SCRIPT_DIR/menu/haproxy.sh ;;
+    9) bash $SCRIPT_DIR/menu/changedomain.sh ;;
+    10) bash $SCRIPT_DIR/menu/update.sh ;;
+    11) bash $SCRIPT_DIR/menu/uninstall.sh ;;
+    12) bash $SCRIPT_DIR/menu/services.sh ;;
+    13) bash $SCRIPT_DIR/menu/sysinfo.sh ;;
     0) clear; exit 0 ;;
     *) echo -e "  ${RED}[!] Pilihan tidak valid!${NC}"; sleep 1; main_menu ;;
   esac
