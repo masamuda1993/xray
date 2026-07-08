@@ -30,7 +30,6 @@ show_header() {
   systemctl is-active --quiet xray              && xray_st="${GREEN}● ON${NC}"    || xray_st="${RED}● OFF${NC}"
   systemctl is-active --quiet nginx             && nginx_st="${GREEN}● ON${NC}"   || nginx_st="${RED}● OFF${NC}"
   systemctl is-active --quiet dropbear          && db_st="${GREEN}● ON${NC}"      || db_st="${RED}● OFF${NC}"
-  systemctl is-active --quiet ws-dropbear 2>/dev/null && wsd_st="${GREEN}● ON${NC}"     || wsd_st="${RED}● OFF${NC}"
   systemctl is-active --quiet stunnel4 2>/dev/null   && stunnel_st="${GREEN}● ON${NC}" || stunnel_st="${RED}● OFF${NC}"
   systemctl is-active --quiet haproxy 2>/dev/null    && haproxy_st="${GREEN}● ON${NC}" || haproxy_st="${RED}● OFF${NC}"
 
@@ -47,8 +46,7 @@ show_header() {
   echo -e "  ${YELLOW}Uptime   ${NC}: ${WHITE}$uptime${NC}"
   echo -e "  ${YELLOW}Network  ${NC}: ${WHITE}$net${NC}"
   echo -e "${CYAN}$LINE${NC}"
-  echo -e "  Xray: $xray_st Nginx: $nginx_st Dropbear: $db_st SSH-WS: $wsd_st Stunnel4: $stunnel_st"
-  echo -e "  HAProxy: $haproxy_st"
+  echo -e "  Xray: $xray_st Nginx: $nginx_st Dropbear: $db_st  Stunnel4: $stunnel_st HAProxy: $haproxy_st"
   echo -e "${CYAN}$LINE${NC}"
   echo -e "  ${YELLOW}VMess${NC}: ${WHITE}$vmess_count${NC}  ${YELLOW}VLess${NC}: ${WHITE}$vless_count${NC}  ${YELLOW}Trojan${NC}: ${WHITE}$trojan_count${NC}  ${YELLOW}SS${NC}: ${WHITE}$ss_count${NC}  ${YELLOW}SSH${NC}: ${WHITE}$ssh_count${NC}"
   echo -e "${CYAN}$LINE${NC}"
