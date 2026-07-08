@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 #   CHANELOG VPN SCRIPT - LIBRARY FUNCTIONS (ALL-IN-ONE)
-#   Supports: VMess, VLess, Trojan, Shadowsocks, SSH-WS
+#   Supports: VMess, VLess, Trojan, Shadowsocks, SSH-WS, HAProxy
 # ============================================================
 
 SCRIPT_DIR="/etc/vpn-script"
@@ -419,7 +419,7 @@ gen_vmess_link() {
     port=80; path="/vmess-ntls"
   fi
 
-  local json="{\"v\":\"2\",\"ps\":\"${remark:-$user-vmess-$type}\",\"add\":\"$domain\",\"port\":\"$port\",\"id\":\"$uuid\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$domain\",\"path\":\"$path\",\"tls\":\"$([ "$type" == "tls" ] && echo "tls" || echo "")\",\"sni\":\"$domain\"}"
+  local json="{\"v\":\"2\",\"ps\":\"${remark:-$user-vmess-$type}\",\"add\":\"$domain\",\"port\":\"$port\",\"id\":\"$uuid\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$domain\",\"path\":\"$path\",\"tls\":\"$type\"}"
   echo "vmess://$(echo -n "$json" | base64 -w 0)"
 }
 
@@ -584,7 +584,7 @@ delete_expired_ssh() {
 # ════════════════════════════════════════════════════════════
 #  SERVICE MANAGEMENT
 # ════════════════════════════════════════════════════════════
-MANAGED_SERVICES=(xray nginx dropbear stunnel4 ws-proxy)
+MANAGED_SERVICES=(xray nginx dropbear stunnel4 ws-proxy haproxy)
 
 service_display_name() {
   case "$1" in
@@ -593,6 +593,7 @@ service_display_name() {
     dropbear)  echo "Dropbear SSH" ;;
     stunnel4)  echo "Stunnel4 (SSH-SSL)" ;;
     ws-proxy)  echo "SSH-WS/SSL Proxy" ;;
+    haproxy)   echo "HAProxy (SSH-WS-SSL LB)" ;;
     *)         echo "$1" ;;
   esac
 }
@@ -640,6 +641,7 @@ UPDATE_FILES=(
   "menu/ss.sh"
   "menu/nginx.sh"
   "menu/dropbear.sh"
+  "menu/haproxy.sh"
   "menu/sysinfo.sh"
   "menu/changedomain.sh"
   "menu/uninstall.sh"
